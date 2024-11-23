@@ -1,0 +1,59 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function canAccessLead(lead) {
+      return !isAuthenticated() || 
+             isAdmin() || 
+             lead.status == 'New' || 
+             (isAuthenticated() && request.auth.uid in lead.purchasedBy);
+    }
+
+    // Users collection rules
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && 
+        request.resource.data.role == 'user' &&
+        request.resource.data.status == 'active';
+      allow update: if (isOwner(userId) && 
+        request.resource.data.role == resource.data.role) || 
+        isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Leads collection rules
+    match /leads/{leadId} {
+      allow read: if canAccessLead(resource.data);
+      allow create: if true;
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (request.auth.uid in resource.data.purchasedBy && 
+         request.resource.data.diff(resource.data).affectedKeys()
+         .hasOnly(['leadStatus', 'updatedAt']))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Payments collection rules
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == resource.data.userId || isAdmin()
+      );
+      allow write: if isAdmin();
+    }
+  }
+}
